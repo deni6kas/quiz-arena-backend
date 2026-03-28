@@ -5,7 +5,7 @@ Pydantic-схемы для валидации запросов и ответов
 from datetime import datetime
 from typing import List
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CategoryCreate(BaseModel):
@@ -66,7 +66,7 @@ class QuestionFull(QuestionRead):
 
 class PlayerCreate(BaseModel):
     nickname: str = Field(min_length=1)
-    email: EmailStr
+    email: str = Field(min_length=1)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -74,7 +74,7 @@ class PlayerCreate(BaseModel):
 class PlayerRead(BaseModel):
     id: int
     nickname: str
-    email: EmailStr
+    email: str
 
     model_config = ConfigDict(from_attributes=True)
 
