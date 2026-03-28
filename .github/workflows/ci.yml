@@ -1,0 +1,86 @@
+name: Exam CI
+
+on:
+  - pull_request
+
+jobs:
+  build:
+    name: python
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: quiz_arena
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/quiz_arena
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint
+        run: ruff check solution --no-cache
+        continue-on-error: true
+
+      - name: Run tests
+        id: tests
+        run: pytest test -s
+        continue-on-error: true
+
+      - name: Report results to Google Sheets
+        if: always() && hashFiles('results.json') != ''
+        env:
+          WEBHOOK_URL: ${{ secrets.GOOGLE_SHEETS_WEBHOOK }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "GOOGLE_SHEETS_WEBHOOK secret not set, skipping report"
+            exit 0
+          fi
+          python3 -c "
+          import json, sys
+          try:
+              with open('results.json') as f:
+                  r = json.load(f)
+          except Exception:
+              sys.exit(0)
+          payload = {
+              'actor': '${{ github.actor }}',
+              'repo': '${{ github.repository }}',
+              'sha': '${{ github.sha }}'[:7],
+              'total_earned': r['total']['earned'],
+              'total_max': r['total']['max'],
+              'lint': r.get('lint', {}).get('earned', 0),
+          }
+          for key, val in r.get('tasks', {}).items():
+              payload[key] = val['earned']
+          with open('/tmp/payload.json', 'w') as f:
+              json.dump(payload, f)
+          " && \
+          curl -sS -L --post302 \
+            -H "Content-Type: application/json" \
+            -d @/tmp/payload.json \
+            "$WEBHOOK_URL"
+
+      - name: Fail if tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
