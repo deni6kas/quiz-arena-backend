@@ -1,45 +1,148 @@
 """
 Pydantic-схемы для валидации запросов и ответов.
-
-TODO: опишите схемы для каждой сущности.
-      Как минимум нужны:
-
-      Categories:
-        - CategoryCreate  (name: str, min_length=1)
-        - CategoryRead    (id, name)
-
-      Quizzes:
-        - QuizCreate      (title, category_id, time_limit >= 30)
-        - QuizRead        (id, title, category_id, time_limit, created_at)
-        - QuizDetail      (QuizRead + questions_count)
-
-      Questions:
-        - QuestionCreate  (text, options: list[str] длина 2-6, correct_index >= 0)
-        - QuestionRead    (id, quiz_id, text, options БЕЗ correct_index!)
-        - QuestionFull    (QuestionRead + correct_index только для внутреннего использования)
-
-      Players:
-        - PlayerCreate    (nickname, email)
-        - PlayerRead      (id, nickname, email)
-
-      Attempts:
-        - AttemptStart    (player_id)
-        - AttemptStarted  (attempt_id, started_at, time_limit)
-        - AnswerItem      (question_id, answer: int)
-        - AttemptSubmit   (answers: list[AnswerItem])
-        - AttemptResult   (score, max_score, percent, finished_at)
-
-      Leaderboard:
-        - LeaderboardEntry (nickname, score, max_score, time_seconds)
-
-      Stats:
-        - BestQuiz        (quiz_title, score, max_score, percent)
-        - PlayerStats     (player: PlayerRead, total_attempts, avg_score_percent, best_quiz)
-
-      Import:
-        - ImportRequest   (amount: int, 1-20)
 """
 
-from pydantic import BaseModel  # noqa: F401
+from datetime import datetime
+from typing import List
 
-# TODO: ваши схемы здесь
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class CategoryCreate(BaseModel):
+    name: str = Field(min_length=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CategoryRead(BaseModel):
+    id: int
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuizCreate(BaseModel):
+    title: str = Field(min_length=1)
+    category_id: int
+    time_limit: int = Field(ge=30)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuizRead(BaseModel):
+    id: int
+    title: str
+    category_id: int
+    time_limit: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuizDetail(QuizRead):
+    questions_count: int
+
+
+class QuestionCreate(BaseModel):
+    text: str = Field(min_length=1)
+    options: List[str] = Field(min_items=2, max_items=6)
+    correct_index: int = Field(ge=0)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuestionRead(BaseModel):
+    id: int
+    quiz_id: int
+    text: str
+    options: List[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuestionFull(QuestionRead):
+    correct_index: int
+
+
+class PlayerCreate(BaseModel):
+    nickname: str = Field(min_length=1)
+    email: EmailStr
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlayerRead(BaseModel):
+    id: int
+    nickname: str
+    email: EmailStr
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AttemptStart(BaseModel):
+    player_id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AttemptStarted(BaseModel):
+    attempt_id: int
+    started_at: datetime
+    time_limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AnswerItem(BaseModel):
+    question_id: int
+    answer: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AttemptSubmit(BaseModel):
+    answers: List[AnswerItem] = Field(min_items=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AttemptResult(BaseModel):
+    score: int
+    max_score: int
+    percent: float
+    finished_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LeaderboardEntry(BaseModel):
+    nickname: str
+    score: int
+    max_score: int
+    time_seconds: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BestQuiz(BaseModel):
+    quiz_title: str
+    score: int
+    max_score: int
+    percent: float
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlayerStats(BaseModel):
+    player: PlayerRead
+    total_attempts: int
+    avg_score_percent: float
+    best_quiz: BestQuiz | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ImportRequest(BaseModel):
+    amount: int = Field(ge=1, le=20)
+
+    model_config = ConfigDict(from_attributes=True)

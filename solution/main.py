@@ -1,198 +1,467 @@
-"""
+﻿"""
 FastAPI-приложение Quiz Arena.
-
-TODO: реализуйте все эндпоинты.
-      Каждый эндпоинт заглушка с raise HTTPException(501).
-      Замените их на рабочую логику.
-
-Подсказки:
-  - Используйте Depends(get_session) для получения сессии БД
-  - Ловите IntegrityError от SQLAlchemy и возвращайте 409/400
-  - Для импорта вопросов используйте httpx.AsyncClient
-  - Сервер НЕ должен возвращать 500 ловите все исключения БД
 """
 
+from datetime import datetime
+import random
+
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from solution.models import Attempt, Category, Player, Question, Quiz
+from solution.schemas import (
+    AttemptResult,
+    AttemptStarted,
+    AttemptSubmit,
+    AttemptStart,
+    CategoryCreate,
+    CategoryRead,
+    ImportRequest,
+    LeaderboardEntry,
+    PlayerCreate,
+    PlayerRead,
+    PlayerStats,
+    QuestionCreate,
+    QuestionRead,
+    QuizCreate,
+    QuizDetail,
+    QuizRead,
+)
+
 # ВАЖНО: импортируйте models, чтобы SQLAlchemy узнал о ваших таблицах.
 # Без этого импорта Base.metadata будет пустой и create_all ничего не создаст.
 from solution import models  # noqa: F401
 from solution.database import Base, engine, get_session  # noqa: F401
-from sqlalchemy.orm import Session
 
 app = FastAPI(title="Quiz Arena API")
-
-# Создаём таблицы при старте (если ещё не существуют).
-# Раскомментируйте после того, как опишете модели в models.py:
-# Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 
 # ── Categories ────────────────────────────────────────────────────────────────
 
 
-@app.post("/categories", status_code=201)
-def create_category(session: Session = Depends(get_session)):
-    """POST /categories -> 201, CategoryRead"""
-    # TODO: создать категорию {"name": "..."}
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+@app.post("/categories", response_model=CategoryRead, status_code=201)
+def create_category(
+    category: CategoryCreate,
+    session: Session = Depends(get_session),
+):
+    category_obj = Category(name=category.name)
+    session.add(category_obj)
+    try:
+        session.commit()
+        session.refresh(category_obj)
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT)
+
+    return category_obj
 
 
-@app.get("/categories", status_code=200)
+@app.get("/categories", response_model=list[CategoryRead], status_code=200)
 def list_categories(session: Session = Depends(get_session)):
-    """GET /categories -> 200, list[CategoryRead]"""
-    # TODO: вернуть список всех категорий
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    result = session.execute(select(Category))
+    return result.scalars().all()
 
 
 # ── Quizzes ───────────────────────────────────────────────────────────────────
 
+@app.post("/quizzes", response_model=QuizRead, status_code=201)
+def create_quiz(
+    quiz: QuizCreate,
+    session: Session = Depends(get_session),
+):
+    if session.get(Category, quiz.category_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    quiz_obj = Quiz(
+        title=quiz.title,
+        category_id=quiz.category_id,
+        time_limit=quiz.time_limit,
+        created_at=datetime.utcnow(),
+    )
+    session.add(quiz_obj)
+    try:
+        session.commit()
+        session.refresh(quiz_obj)
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT)
+    return quiz_obj
 
-@app.post("/quizzes", status_code=201)
-def create_quiz(session: Session = Depends(get_session)):
-    """POST /quizzes -> 201, QuizRead"""
-    # TODO: создать квиз {"title", "category_id", "time_limit"}
-    # time_limit >= 30 (валидация через Pydantic)
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+
+@app.get("/quizzes", response_model=list[QuizRead], status_code=200)
+def list_quizzes(
+    category_id: int | None = None,
+    session: Session = Depends(get_session),
+):
+    stmt = select(Quiz)
+    if category_id is not None:
+        stmt = stmt.where(Quiz.category_id == category_id)
+    result = session.execute(stmt)
+    return result.scalars().all()
 
 
-@app.get("/quizzes", status_code=200)
-def list_quizzes(category_id: int | None = None, session: Session = Depends(get_session)):
-    """GET /quizzes -> 200, list[QuizRead]
-    Query param: category_id (опционально) фильтрация по категории.
-    """
-    # TODO: вернуть список квизов, при наличии category_id фильтровать
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
-
-
-@app.get("/quizzes/{quiz_id}", status_code=200)
+@app.get("/quizzes/{quiz_id}", response_model=QuizDetail, status_code=200)
 def get_quiz(quiz_id: int, session: Session = Depends(get_session)):
-    """GET /quizzes/{id} -> 200, QuizDetail (с questions_count)"""
-    # TODO: вернуть квиз по id, включая questions_count
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    quiz_obj = session.get(Quiz, quiz_id)
+    if quiz_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    questions_count = session.scalar(
+        select(func.count())
+        .select_from(Question)
+        .where(Question.quiz_id == quiz_id)
+    )
+    return QuizDetail(
+        id=quiz_obj.id,
+        title=quiz_obj.title,
+        category_id=quiz_obj.category_id,
+        time_limit=quiz_obj.time_limit,
+        created_at=quiz_obj.created_at,
+        questions_count=questions_count or 0,
+    )
 
 
 @app.delete("/quizzes/{quiz_id}", status_code=204)
 def delete_quiz(quiz_id: int, session: Session = Depends(get_session)):
-    """DELETE /quizzes/{id} -> 204 (каскадно удаляет вопросы и попытки)"""
-    # TODO: удалить квиз, вопросы удаляются каскадно
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    quiz_obj = session.get(Quiz, quiz_id)
+    if quiz_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    session.delete(quiz_obj)
+    session.commit()
 
 
 # ── Questions ─────────────────────────────────────────────────────────────────
 
 
-@app.post("/quizzes/{quiz_id}/questions", status_code=201)
-def create_question(quiz_id: int, session: Session = Depends(get_session)):
-    """POST /quizzes/{id}/questions -> 201
-    Body: {"text", "options": [...], "correct_index": N}
-    """
-    # TODO: добавить вопрос к квизу
-    # Валидация: options список из 2-6 строк, correct_index >= 0
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+@app.post(
+    "/quizzes/{quiz_id}/questions",
+    response_model=QuestionRead,
+    status_code=201,
+)
+def create_question(
+    quiz_id: int,
+    question: QuestionCreate,
+    session: Session = Depends(get_session),
+):
+    if session.get(Quiz, quiz_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    question_obj = Question(
+        quiz_id=quiz_id,
+        text=question.text,
+        options=question.options,
+        correct_index=question.correct_index,
+    )
+    session.add(question_obj)
+    try:
+        session.commit()
+        session.refresh(question_obj)
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT)
+
+    return question_obj
 
 
-@app.get("/quizzes/{quiz_id}/questions", status_code=200)
+@app.get(
+    "/quizzes/{quiz_id}/questions",
+    response_model=list[QuestionRead],
+    status_code=200,
+)
 def list_questions(quiz_id: int, session: Session = Depends(get_session)):
-    """GET /quizzes/{id}/questions -> 200, list[QuestionRead]
-    ВАЖНО: correct_index НЕ возвращается! Не раскрываем ответы.
-    """
-    # TODO: вернуть список вопросов квиза БЕЗ correct_index
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    if session.get(Quiz, quiz_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    result = session.execute(
+        select(Question).where(Question.quiz_id == quiz_id)
+    )
+    return result.scalars().all()
 
 
 # ── Players ───────────────────────────────────────────────────────────────────
 
 
-@app.post("/players", status_code=201)
-def create_player(session: Session = Depends(get_session)):
-    """POST /players -> 201, PlayerRead"""
-    # TODO: зарегистрировать игрока {"nickname", "email"}
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+@app.post("/players", response_model=PlayerRead, status_code=201)
+def create_player(
+    player: PlayerCreate,
+    session: Session = Depends(get_session),
+):
+    player_obj = Player(
+        nickname=player.nickname,
+        email=player.email,
+    )
+    session.add(player_obj)
+    try:
+        session.commit()
+        session.refresh(player_obj)
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT)
+
+    return player_obj
 
 
-@app.get("/players/{player_id}", status_code=200)
+@app.get("/players/{player_id}", response_model=PlayerRead, status_code=200)
 def get_player(player_id: int, session: Session = Depends(get_session)):
-    """GET /players/{id} -> 200, PlayerRead"""
-    # TODO: вернуть игрока по id
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    player_obj = session.get(Player, player_id)
+    if player_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return player_obj
 
 
 # ── Game Flow ─────────────────────────────────────────────────────────────────
 
 
-@app.post("/quizzes/{quiz_id}/start", status_code=201)
-def start_attempt(quiz_id: int, session: Session = Depends(get_session)):
-    """POST /quizzes/{id}/start -> 201
-    Body: {"player_id": N}
-    Response: {"attempt_id", "started_at", "time_limit"}
-    """
-    # TODO: создать попытку прохождения
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+@app.post(
+    "/quizzes/{quiz_id}/start",
+    response_model=AttemptStarted,
+    status_code=201,
+)
+def start_attempt(
+    quiz_id: int,
+    attempt: AttemptStart,
+    session: Session = Depends(get_session),
+):
+    quiz_obj = session.get(Quiz, quiz_id)
+    if quiz_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    if session.get(Player, attempt.player_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    attempt_obj = Attempt(
+        player_id=attempt.player_id,
+        quiz_id=quiz_id,
+        started_at=datetime.utcnow(),
+    )
+    session.add(attempt_obj)
+    session.commit()
+    session.refresh(attempt_obj)
+
+    return AttemptStarted(
+        attempt_id=attempt_obj.id,
+        started_at=attempt_obj.started_at,
+        time_limit=quiz_obj.time_limit,
+    )
 
 
-@app.post("/attempts/{attempt_id}/submit", status_code=200)
-def submit_attempt(attempt_id: int, session: Session = Depends(get_session)):
-    """POST /attempts/{id}/submit -> 200
-    Body: {"answers": [{"question_id": N, "answer": M}, ...]}
-    Response: {"score", "max_score", "percent", "finished_at"}
+@app.post(
+    "/attempts/{attempt_id}/submit",
+    response_model=AttemptResult,
+    status_code=200,
+)
+def submit_attempt(
+    attempt_id: int,
+    submission: AttemptSubmit,
+    session: Session = Depends(get_session),
+):
+    attempt_obj = session.get(Attempt, attempt_id)
+    if attempt_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if attempt_obj.finished_at is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already submitted")
 
-    Логика:
-      1. Проверить, что попытка существует и не завершена (finished_at is NULL)
-         - Если finished_at заполнен -> 409 "Already submitted"
-      2. Проверить time_limit: если now() - started_at > time_limit -> 400 "Time is up"
-      3. Для каждого ответа:
-         - Найти вопрос по question_id (должен принадлежать quiz_id попытки)
-         - Сравнить answer с correct_index -> если совпадает, +1 к score
-      4. Записать score, max_score = кол-во вопросов, finished_at = now()
-    """
-    # TODO: реализовать подсчёт очков
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    quiz_obj = session.get(Quiz, attempt_obj.quiz_id)
+    if quiz_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    elapsed = datetime.utcnow() - attempt_obj.started_at
+    if elapsed.total_seconds() > quiz_obj.time_limit:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Time is up")
+
+    questions = session.execute(
+        select(Question).where(Question.quiz_id == quiz_obj.id)
+    ).scalars().all()
+    questions_by_id = {question.id: question for question in questions}
+    max_score = len(questions)
+    score = 0
+    answered_ids: set[int] = set()
+
+    for answer in submission.answers:
+        if answer.question_id in answered_ids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+        answered_ids.add(answer.question_id)
+
+        question_obj = questions_by_id.get(answer.question_id)
+        if question_obj is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+
+        if answer.answer == question_obj.correct_index:
+            score += 1
+
+    attempt_obj.score = score
+    attempt_obj.max_score = max_score
+    attempt_obj.finished_at = datetime.utcnow()
+    session.commit()
+    session.refresh(attempt_obj)
+
+    percent = 0.0
+    if max_score > 0:
+        percent = score / max_score * 100.0
+
+    return AttemptResult(
+        score=score,
+        max_score=max_score,
+        percent=percent,
+        finished_at=attempt_obj.finished_at,
+    )
 
 
 # ── Leaderboard & Stats ──────────────────────────────────────────────────────
 
 
-@app.get("/quizzes/{quiz_id}/leaderboard", status_code=200)
-def get_leaderboard(quiz_id: int, limit: int = 10, session: Session = Depends(get_session)):
-    """GET /quizzes/{id}/leaderboard -> 200
-    Query: limit (default 10)
-    Response: list[LeaderboardEntry]
-      - nickname, score, max_score, time_seconds
-      - Сортировка: score DESC, при равенстве time_seconds ASC
-      - Только завершённые попытки (finished_at IS NOT NULL)
-    """
-    # TODO: реализовать лидерборд
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+@app.get(
+    "/quizzes/{quiz_id}/leaderboard",
+    response_model=list[LeaderboardEntry],
+    status_code=200,
+)
+def get_leaderboard(
+    quiz_id: int,
+    limit: int = 10,
+    session: Session = Depends(get_session),
+):
+    if session.get(Quiz, quiz_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    rows = session.execute(
+        select(Attempt, Player)
+        .join(Player, Attempt.player_id == Player.id)
+        .where(
+            Attempt.quiz_id == quiz_id,
+            Attempt.finished_at.is_not(None),
+        )
+    ).all()
+
+    entries = []
+    for attempt_obj, player_obj in rows:
+        time_seconds = int((attempt_obj.finished_at - attempt_obj.started_at).total_seconds())
+        entries.append(
+            LeaderboardEntry(
+                nickname=player_obj.nickname,
+                score=attempt_obj.score,
+                max_score=attempt_obj.max_score,
+                time_seconds=time_seconds,
+            )
+        )
+
+    entries.sort(key=lambda entry: (-entry.score, entry.time_seconds))
+    return entries[:limit]
 
 
-@app.get("/players/{player_id}/stats", status_code=200)
+@app.get(
+    "/players/{player_id}/stats",
+    response_model=PlayerStats,
+    status_code=200,
+)
 def get_player_stats(player_id: int, session: Session = Depends(get_session)):
-    """GET /players/{id}/stats -> 200
-    Response: {
-      "player": PlayerRead,
-      "total_attempts": int,
-      "avg_score_percent": float,
-      "best_quiz": {"quiz_title", "score", "max_score", "percent"} | null
-    }
-    Считаются только завершённые попытки.
-    """
-    # TODO: реализовать статистику игрока
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    player_obj = session.get(Player, player_id)
+    if player_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    rows = session.execute(
+        select(Attempt, Quiz)
+        .join(Quiz, Attempt.quiz_id == Quiz.id)
+        .where(
+            Attempt.player_id == player_id,
+            Attempt.finished_at.is_not(None),
+        )
+    ).all()
+
+    attempts = []
+    for attempt_obj, quiz_obj in rows:
+        percent = 0.0
+        if attempt_obj.max_score and attempt_obj.max_score > 0:
+            percent = attempt_obj.score / attempt_obj.max_score * 100.0
+        attempts.append((attempt_obj, quiz_obj, percent))
+
+    total_attempts = len(attempts)
+    avg_score_percent = 0.0
+    best_quiz = None
+    if total_attempts > 0:
+        avg_score_percent = sum(percent for _, _, percent in attempts) / total_attempts
+        best_attempt = max(
+            attempts,
+            key=lambda item: (item[2], item[0].finished_at or datetime.min),
+        )
+        best_quiz = BestQuiz(
+            quiz_title=best_attempt[1].title,
+            score=best_attempt[0].score,
+            max_score=best_attempt[0].max_score,
+            percent=best_attempt[2],
+        )
+
+    return PlayerStats(
+        player=player_obj,
+        total_attempts=total_attempts,
+        avg_score_percent=avg_score_percent,
+        best_quiz=best_quiz,
+    )
 
 
-# ── Import (внешний API) ─────────────────────────────────────────────────────
+# ── Import (внешний API) ──────────────────────────────────────────────────────
 
 
-@app.post("/quizzes/{quiz_id}/import", status_code=201)
-async def import_questions(quiz_id: int, session: Session = Depends(get_session)):
-    """POST /quizzes/{id}/import -> 201
-    Body: {"amount": N}  (1 <= N <= 20)
+@app.post(
+    "/quizzes/{quiz_id}/import",
+    response_model=list[QuestionRead],
+    status_code=201,
+)
+async def import_questions(
+    quiz_id: int,
+    request: ImportRequest,
+    session: Session = Depends(get_session),
+):
+    quiz_obj = session.get(Quiz, quiz_id)
+    if quiz_obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    1. Отправить GET к https://opentdb.com/api.php?amount=N&type=multiple
-    2. Трансформировать: из incorrect_answers + correct_answer собрать options
-       (перемешать!), вычислить correct_index
-    3. Сохранить вопросы в БД
-    4. Вернуть список созданных вопросов
-    5. При ошибке внешнего API -> 502
-    """
-    # TODO: реализовать импорт из Open Trivia DB
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "https://opentdb.com/api.php",
+            params={"amount": request.amount, "type": "multiple"},
+            timeout=10,
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY)
+
+    try:
+        payload = response.json()
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY)
+
+    if payload.get("response_code") != 0 or "results" not in payload:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY)
+
+    questions = []
+    for item in payload["results"]:
+        options = list(item["incorrect_answers"])
+        correct_answer = item["correct_answer"]
+        options.append(correct_answer)
+        random.shuffle(options)
+        correct_index = options.index(correct_answer)
+
+        question_obj = Question(
+            quiz_id=quiz_id,
+            text=item["question"],
+            options=options,
+            correct_index=correct_index,
+        )
+        session.add(question_obj)
+        questions.append(question_obj)
+
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY)
+
+    for question_obj in questions:
+        session.refresh(question_obj)
+
+    return questions

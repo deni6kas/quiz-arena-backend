@@ -8,43 +8,88 @@ SQLAlchemy-модели для базы quiz_arena.
   - players      игроки
   - attempts     попытки прохождения (FK -> players, quizzes)
 
-TODO: опишите модели.
-      Используйте DeclarativeBase из database.py.
-      Не забудьте про UNIQUE, FK, CHECK-ограничения и каскадное удаление.
 """
 
-from solution.database import Base  # noqa: F401
+from datetime import datetime
 
-# TODO: импорты из sqlalchemy (Column, Integer, String, ForeignKey, JSON, DateTime, ...)
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, func
+from sqlalchemy.orm import Mapped, mapped_column
 
-# TODO: модель Category
-#   id    SERIAL PRIMARY KEY
-#   name  VARCHAR UNIQUE NOT NULL
+from solution.database import Base
 
-# TODO: модель Quiz
-#   id           SERIAL PRIMARY KEY
-#   title        VARCHAR NOT NULL
-#   category_id  INTEGER FK -> categories (NOT NULL)
-#   time_limit   INTEGER NOT NULL (>= 30, секунды)
-#   created_at   TIMESTAMP DEFAULT now()
+__all__ = [
+    "Category",
+    "Quiz",
+    "Question",
+    "Player",
+    "Attempt",
+]
 
-# TODO: модель Question
-#   id             SERIAL PRIMARY KEY
-#   quiz_id        INTEGER FK -> quizzes ON DELETE CASCADE
-#   text           VARCHAR NOT NULL
-#   options        JSON NOT NULL (список из 2-6 строк)
-#   correct_index  INTEGER NOT NULL (>= 0)
 
-# TODO: модель Player
-#   id        SERIAL PRIMARY KEY
-#   nickname  VARCHAR UNIQUE NOT NULL
-#   email     VARCHAR UNIQUE NOT NULL
+class Category(Base):
+    __tablename__ = "categories"
 
-# TODO: модель Attempt
-#   id           SERIAL PRIMARY KEY
-#   player_id    INTEGER FK -> players (NOT NULL)
-#   quiz_id      INTEGER FK -> quizzes ON DELETE CASCADE
-#   score        INTEGER (NULL пока не завершена)
-#   max_score    INTEGER (NULL пока не завершена)
-#   started_at   TIMESTAMP NOT NULL DEFAULT now()
-#   finished_at  TIMESTAMP (NULL пока не завершена)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+
+
+class Quiz(Base):
+    __tablename__ = "quizzes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id"), nullable=False
+    )
+    time_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("time_limit >= 30", name="quiz_time_limit_min"),
+    )
+
+
+class Question(Base):
+    __tablename__ = "questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    quiz_id: Mapped[int] = mapped_column(
+        ForeignKey("quizzes.id", ondelete="CASCADE"), nullable=False
+    )
+    text: Mapped[str] = mapped_column(String, nullable=False)
+    options: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    correct_index: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("correct_index >= 0", name="question_correct_index_non_negative"),
+        CheckConstraint(
+            "json_array_length(options) >= 2 AND json_array_length(options) <= 6",
+            name="question_options_length",
+        ),
+    )
+
+
+class Player(Base):
+    __tablename__ = "players"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nickname: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+
+
+class Attempt(Base):
+    __tablename__ = "attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), nullable=False)
+    quiz_id: Mapped[int] = mapped_column(
+        ForeignKey("quizzes.id", ondelete="CASCADE"), nullable=False
+    )
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
