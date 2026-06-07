@@ -31,8 +31,6 @@ from solution.schemas import (
     QuizRead,
 )
 
-# ВАЖНО: импортируйте models, чтобы SQLAlchemy узнал о ваших таблицах.
-# Без этого импорта Base.metadata будет пустой и create_all ничего не создаст.
 from solution import models  # noqa: F401
 from solution.database import Base, engine, get_session  # noqa: F401
 
